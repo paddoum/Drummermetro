@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
-import { Audio } from 'expo-av';
+import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
 
 function vibrate(isDownbeat) {
@@ -22,69 +22,76 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
   const [flash, setFlash] = useState(false);
   const [isDownbeat, setIsDownbeat] = useState(false);
 
-  const timerRef       = useRef(null);
-  const beatRef        = useRef(0);
-  const barRef         = useRef(0);
-  const expectedRef    = useRef(0);
-  const isPlayingRef   = useRef(false);
-  const clickSoundRef  = useRef(null);
-  const accentSoundRef = useRef(null);
-  const soundsReady    = useRef(false);
+  // Double-buffer: A plays while B seeks back to 0, then swap
+  const clickA  = useAudioPlayer(require('../../assets/click.wav'));
+  const clickB  = useAudioPlayer(require('../../assets/click.wav'));
+  const accentA = useAudioPlayer(require('../../assets/accent.wav'));
+  const accentB = useAudioPlayer(require('../../assets/accent.wav'));
 
-  const bpmRef        = useRef(bpm);            bpmRef.current = bpm;
-  const timeSigRef    = useRef(timeSignature);  timeSigRef.current = timeSignature;
-  const barsRef       = useRef(bars);           barsRef.current = bars;
-  const soundRef      = useRef(soundEnabled);   soundRef.current = soundEnabled;
-  const hapticsRef    = useRef(hapticsEnabled); hapticsRef.current = hapticsEnabled;
-  const onFinishedRef = useRef(onFinished);     onFinishedRef.current = onFinished;
+  const timerRef     = useRef(null);
+  const beatRef      = useRef(0);
+  const barRef       = useRef(0);
+  const expectedRef  = useRef(0);
+  const isPlayingRef = useRef(false);
+  // Which buffer is "active" (currently playing)
+  const clickActive  = useRef('A');  // 'A' or 'B'
+  const accentActive = useRef('A');
 
-  // Load sounds once on mount
+  const bpmRef        = useRef(bpm);           bpmRef.current = bpm;
+  const timeSigRef    = useRef(timeSignature); timeSigRef.current = timeSignature;
+  const barsRef       = useRef(bars);          barsRef.current = bars;
+  const soundRef      = useRef(soundEnabled);  soundRef.current = soundEnabled;
+  const hapticsRef    = useRef(hapticsEnabled);hapticsRef.current = hapticsEnabled;
+  const onFinishedRef = useRef(onFinished);    onFinishedRef.current = onFinished;
+
+  // Keep player refs stable
+  const clickARef  = useRef(clickA);  clickARef.current  = clickA;
+  const clickBRef  = useRef(clickB);  clickBRef.current  = clickB;
+  const accentARef = useRef(accentA); accentARef.current = accentA;
+  const accentBRef = useRef(accentB); accentBRef.current = accentB;
+
   useEffect(() => {
-    let mounted = true;
-    async function loadSounds() {
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-      });
-      const { sound: click } = await Audio.Sound.createAsync(
-        require('../../assets/click.wav'),
-        { shouldPlay: false, volume: 1.0 }
-      );
-      const { sound: accent } = await Audio.Sound.createAsync(
-        require('../../assets/accent.wav'),
-        { shouldPlay: false, volume: 1.0 }
-      );
-      if (!mounted) { click.unloadAsync(); accent.unloadAsync(); return; }
-      clickSoundRef.current  = click;
-      accentSoundRef.current = accent;
-      soundsReady.current    = true;
+    setAudioModeAsync({
+      playsInSilentModeIOS: true,
+      shouldPlayInBackground: true,
+    }).catch(() => {});
+  }, []);
+
+  const playSound = useCallback((isFirst) => {
+    if (isFirst) {
+      // Pick the inactive accent player and play it
+      const active   = accentActive.current;
+      const inactive = active === 'A' ? 'B' : 'A';
+      const toPlay   = active   === 'A' ? accentARef.current : accentBRef.current;
+      const toPrep   = inactive === 'A' ? accentARef.current : accentBRef.current;
+
+      accentActive.current = inactive; // swap
+      try { toPlay.play(); } catch {}
+      // Seek the OLD active player back to 0 while it's no longer needed
+      try { toPrep.seekTo(0); } catch {}
+    } else {
+      const active   = clickActive.current;
+      const inactive = active === 'A' ? 'B' : 'A';
+      const toPlay   = active   === 'A' ? clickARef.current : clickBRef.current;
+      const toPrep   = inactive === 'A' ? clickARef.current : clickBRef.current;
+
+      clickActive.current = inactive;
+      try { toPlay.play(); } catch {}
+      try { toPrep.seekTo(0); } catch {}
     }
-    loadSounds().catch(console.warn);
-    return () => {
-      mounted = false;
-      clickSoundRef.current?.unloadAsync();
-      accentSoundRef.current?.unloadAsync();
-    };
   }, []);
 
   const tick = useCallback(() => {
     const beat    = beatRef.current;
     const isFirst = beat === 0;
 
-    // Visual flash
     setIsDownbeat(isFirst);
     setFlash(true);
     setCurrentBeat(beat);
     setCurrentBar(barRef.current);
     setTimeout(() => setFlash(false), 80);
 
-    // Sound — replayAsync() atomically seeks to 0 and plays
-    if (soundRef.current && soundsReady.current) {
-      const sound = isFirst ? accentSoundRef.current : clickSoundRef.current;
-      sound?.replayAsync().catch(() => {});
-    }
-
-    // Haptics
+    if (soundRef.current)   playSound(isFirst);
     if (hapticsRef.current) vibrate(isFirst);
 
     // Advance beat / bar
@@ -111,14 +118,22 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
     }
 
     // Self-correcting scheduler
-    const interval   = (60 / bpmRef.current) * 1000;
+    const interval     = (60 / bpmRef.current) * 1000;
     const nextExpected = expectedRef.current + interval;
-    const delay      = Math.max(0, nextExpected - Date.now());
+    const delay        = Math.max(0, nextExpected - Date.now());
     expectedRef.current = nextExpected;
-    timerRef.current = setTimeout(tick, delay);
-  }, []);
+    timerRef.current   = setTimeout(tick, delay);
+  }, [playSound]);
 
   const start = useCallback(() => {
+    // Pre-seek all players to 0 before starting
+    try { clickARef.current.seekTo(0);  } catch {}
+    try { clickBRef.current.seekTo(0);  } catch {}
+    try { accentARef.current.seekTo(0); } catch {}
+    try { accentBRef.current.seekTo(0); } catch {}
+    clickActive.current  = 'A';
+    accentActive.current = 'A';
+
     beatRef.current      = 0;
     barRef.current       = 0;
     isPlayingRef.current = true;
