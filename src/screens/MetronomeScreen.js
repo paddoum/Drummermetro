@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { useMetronome } from '../hooks/useMetronome';
 
-export default function MetronomeScreen({ track, onNext, hasNext, onOpenPlaylist, soundEnabled }) {
+export default function MetronomeScreen({ track, onNext, hasNext, onOpenPlaylist, soundEnabled, hapticsEnabled }) {
   const { name, bpm, timeSignature, bars } = track;
 
   const { isPlaying, currentBeat, currentBar, flash, isDownbeat, toggle, stop } = useMetronome({
@@ -12,6 +12,7 @@ export default function MetronomeScreen({ track, onNext, hasNext, onOpenPlaylist
     timeSignature,
     bars,
     soundEnabled,
+    hapticsEnabled,
   });
 
   const flashColor = isDownbeat ? '#FF4444' : '#FFFFFF';

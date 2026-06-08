@@ -5,7 +5,7 @@ import * as Haptics from 'expo-haptics';
 const clickSource = require('../../assets/click.wav');
 const accentSource = require('../../assets/accent.wav');
 
-export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnabled }) {
+export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnabled, hapticsEnabled }) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentBeat, setCurrentBeat] = useState(0);
   const [currentBar, setCurrentBar] = useState(0);
@@ -20,6 +20,8 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
   const barRef = useRef(0);
   const soundEnabledRef = useRef(soundEnabled);
   soundEnabledRef.current = soundEnabled;
+  const hapticsEnabledRef = useRef(hapticsEnabled);
+  hapticsEnabledRef.current = hapticsEnabled;
 
   useEffect(() => {
     setAudioModeAsync({ playsInSilentModeIOS: true }).catch(() => {});
@@ -43,9 +45,11 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
       } catch {}
     }
 
-    Haptics.impactAsync(
-      isFirst ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light
-    ).catch(() => {});
+    if (hapticsEnabledRef.current) {
+      Haptics.impactAsync(
+        isFirst ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light
+      ).catch(() => {});
+    }
 
     setTimeout(() => setFlash(false), 80);
 

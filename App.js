@@ -9,6 +9,7 @@ export default function App() {
   const [activeIndex, setActiveIndex] = useState(0);
   const [showPlaylist, setShowPlaylist] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
+  const [hapticsEnabled, setHapticsEnabled] = useState(true);
 
   useEffect(() => {
     loadPlaylist().then(setPlaylist);
@@ -22,10 +23,6 @@ export default function App() {
   const handleNext = useCallback(() => {
     setActiveIndex((i) => Math.min(i + 1, playlist.length - 1));
   }, [playlist.length]);
-
-  const handleFinished = useCallback(() => {
-    // Ne fait rien — l'utilisateur clique "Suivant" manuellement
-  }, []);
 
   if (playlist.length === 0) {
     return (
@@ -45,14 +42,25 @@ export default function App() {
         onNext={handleNext}
         onOpenPlaylist={() => setShowPlaylist(true)}
         soundEnabled={soundEnabled}
+        hapticsEnabled={hapticsEnabled}
       />
 
-      <TouchableOpacity
-        style={styles.soundToggle}
-        onPress={() => setSoundEnabled((s) => !s)}
-      >
-        <Text style={styles.soundToggleText}>{soundEnabled ? '🔊' : '🔇'}</Text>
-      </TouchableOpacity>
+      {/* Toggles son + vibration */}
+      <View style={styles.toggleRow}>
+        <TouchableOpacity
+          style={[styles.toggleBtn, !soundEnabled && styles.toggleBtnOff]}
+          onPress={() => setSoundEnabled((s) => !s)}
+        >
+          <Text style={styles.toggleIcon}>{soundEnabled ? '🔊' : '🔇'}</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[styles.toggleBtn, !hapticsEnabled && styles.toggleBtnOff]}
+          onPress={() => setHapticsEnabled((h) => !h)}
+        >
+          <Text style={styles.toggleIcon}>{hapticsEnabled ? '📳' : '📴'}</Text>
+        </TouchableOpacity>
+      </View>
 
       <Modal
         visible={showPlaylist}
@@ -72,10 +80,14 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  soundToggle: {
+  toggleRow: {
     position: 'absolute',
     bottom: 40,
     right: 24,
+    flexDirection: 'column',
+    gap: 10,
+  },
+  toggleBtn: {
     width: 44,
     height: 44,
     borderRadius: 22,
@@ -85,7 +97,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#333',
   },
-  soundToggleText: {
+  toggleBtnOff: {
+    borderColor: '#FF4444',
+    backgroundColor: '#1a0a0a',
+  },
+  toggleIcon: {
     fontSize: 20,
   },
 });
