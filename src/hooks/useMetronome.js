@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
 import { Platform } from 'react-native';
-import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
+import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
 
 function vibrate(isDownbeat) {
@@ -22,75 +22,78 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
   const [flash, setFlash] = useState(false);
   const [isDownbeat, setIsDownbeat] = useState(false);
 
-  // Two players per sound = no seek conflict between consecutive beats
-  const click1 = useAudioPlayer(require('../../assets/click.wav'));
-  const click2 = useAudioPlayer(require('../../assets/click.wav'));
-  const accent1 = useAudioPlayer(require('../../assets/accent.wav'));
-  const accent2 = useAudioPlayer(require('../../assets/accent.wav'));
+  const timerRef       = useRef(null);
+  const beatRef        = useRef(0);
+  const barRef         = useRef(0);
+  const expectedRef    = useRef(0);
+  const isPlayingRef   = useRef(false);
+  const clickSoundRef  = useRef(null);
+  const accentSoundRef = useRef(null);
+  const soundsReady    = useRef(false);
 
-  const timerRef      = useRef(null);
-  const beatRef       = useRef(0);
-  const barRef        = useRef(0);
-  const expectedRef   = useRef(0);
-  const isPlayingRef  = useRef(false);
-  const clickToggle   = useRef(false);  // alternate between click1/click2
-  const accentToggle  = useRef(false);  // alternate between accent1/accent2
+  const bpmRef        = useRef(bpm);            bpmRef.current = bpm;
+  const timeSigRef    = useRef(timeSignature);  timeSigRef.current = timeSignature;
+  const barsRef       = useRef(bars);           barsRef.current = bars;
+  const soundRef      = useRef(soundEnabled);   soundRef.current = soundEnabled;
+  const hapticsRef    = useRef(hapticsEnabled); hapticsRef.current = hapticsEnabled;
+  const onFinishedRef = useRef(onFinished);     onFinishedRef.current = onFinished;
 
-  // Refs so tick() never reads stale values
-  const bpmRef           = useRef(bpm);           bpmRef.current = bpm;
-  const timeSigRef       = useRef(timeSignature); timeSigRef.current = timeSignature;
-  const barsRef          = useRef(bars);          barsRef.current = bars;
-  const soundRef         = useRef(soundEnabled);  soundRef.current = soundEnabled;
-  const hapticsRef       = useRef(hapticsEnabled);hapticsRef.current = hapticsEnabled;
-  const onFinishedRef    = useRef(onFinished);    onFinishedRef.current = onFinished;
-  const click1Ref        = useRef(click1);        click1Ref.current = click1;
-  const click2Ref        = useRef(click2);        click2Ref.current = click2;
-  const accent1Ref       = useRef(accent1);       accent1Ref.current = accent1;
-  const accent2Ref       = useRef(accent2);       accent2Ref.current = accent2;
-
+  // Load sounds once on mount
   useEffect(() => {
-    setAudioModeAsync({
-      playsInSilentModeIOS: true,
-      shouldPlayInBackground: true,
-    }).catch(() => {});
-  }, []);
-
-  const playSound = useCallback((isFirst) => {
-    if (isFirst) {
-      // Alternate between accent1 and accent2
-      accentToggle.current = !accentToggle.current;
-      const p = accentToggle.current ? accent1Ref.current : accent2Ref.current;
-      try { p.seekTo(0); p.play(); } catch {}
-    } else {
-      clickToggle.current = !clickToggle.current;
-      const p = clickToggle.current ? click1Ref.current : click2Ref.current;
-      try { p.seekTo(0); p.play(); } catch {}
+    let mounted = true;
+    async function loadSounds() {
+      await Audio.setAudioModeAsync({
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: true,
+      });
+      const { sound: click } = await Audio.Sound.createAsync(
+        require('../../assets/click.wav'),
+        { shouldPlay: false, volume: 1.0 }
+      );
+      const { sound: accent } = await Audio.Sound.createAsync(
+        require('../../assets/accent.wav'),
+        { shouldPlay: false, volume: 1.0 }
+      );
+      if (!mounted) { click.unloadAsync(); accent.unloadAsync(); return; }
+      clickSoundRef.current  = click;
+      accentSoundRef.current = accent;
+      soundsReady.current    = true;
     }
+    loadSounds().catch(console.warn);
+    return () => {
+      mounted = false;
+      clickSoundRef.current?.unloadAsync();
+      accentSoundRef.current?.unloadAsync();
+    };
   }, []);
 
   const tick = useCallback(() => {
     const beat    = beatRef.current;
     const isFirst = beat === 0;
 
-    // Visual
+    // Visual flash
     setIsDownbeat(isFirst);
     setFlash(true);
     setCurrentBeat(beat);
     setCurrentBar(barRef.current);
     setTimeout(() => setFlash(false), 80);
 
-    // Sound & haptics
-    if (soundRef.current)   playSound(isFirst);
+    // Sound — replayAsync() atomically seeks to 0 and plays
+    if (soundRef.current && soundsReady.current) {
+      const sound = isFirst ? accentSoundRef.current : clickSoundRef.current;
+      sound?.replayAsync().catch(() => {});
+    }
+
+    // Haptics
     if (hapticsRef.current) vibrate(isFirst);
 
     // Advance beat / bar
     const nextBeat = beat + 1;
     if (nextBeat >= timeSigRef.current) {
       beatRef.current = 0;
-      const nextBar  = barRef.current + 1;
-      const total    = barsRef.current;
+      const nextBar = barRef.current + 1;
+      const total   = barsRef.current;
       if (total > 0 && nextBar >= total) {
-        // End of track — stop
         clearTimeout(timerRef.current);
         isPlayingRef.current = false;
         setIsPlaying(false);
@@ -107,24 +110,22 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
       beatRef.current = nextBeat;
     }
 
-    // Self-correcting scheduler (compensates JS timer drift)
-    const interval    = (60 / bpmRef.current) * 1000;
+    // Self-correcting scheduler
+    const interval   = (60 / bpmRef.current) * 1000;
     const nextExpected = expectedRef.current + interval;
-    const delay       = Math.max(0, nextExpected - Date.now());
+    const delay      = Math.max(0, nextExpected - Date.now());
     expectedRef.current = nextExpected;
-    timerRef.current  = setTimeout(tick, delay);
-  }, [playSound]);
+    timerRef.current = setTimeout(tick, delay);
+  }, []);
 
   const start = useCallback(() => {
-    beatRef.current  = 0;
-    barRef.current   = 0;
-    clickToggle.current  = false;
-    accentToggle.current = false;
+    beatRef.current      = 0;
+    barRef.current       = 0;
     isPlayingRef.current = true;
     setIsPlaying(true);
     setCurrentBeat(0);
     setCurrentBar(0);
-    expectedRef.current = Date.now();
+    expectedRef.current  = Date.now();
     tick();
   }, [tick]);
 
