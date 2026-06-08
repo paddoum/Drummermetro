@@ -1,6 +1,20 @@
 import { useRef, useState, useCallback, useEffect } from 'react';
+import { Platform } from 'react-native';
 import { useAudioPlayer, setAudioModeAsync } from 'expo-audio';
 import * as Haptics from 'expo-haptics';
+
+function vibrate(isDownbeat) {
+  if (Platform.OS === 'web') {
+    // Web Vibration API — supported on Android Chrome, not on iOS Safari
+    if (typeof navigator !== 'undefined' && navigator.vibrate) {
+      navigator.vibrate(isDownbeat ? 60 : 30);
+    }
+  } else {
+    Haptics.impactAsync(
+      isDownbeat ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light
+    ).catch(() => {});
+  }
+}
 
 const clickSource = require('../../assets/click.wav');
 const accentSource = require('../../assets/accent.wav');
@@ -46,9 +60,7 @@ export function useMetronome({ bpm, timeSignature, bars, onFinished, soundEnable
     }
 
     if (hapticsEnabledRef.current) {
-      Haptics.impactAsync(
-        isFirst ? Haptics.ImpactFeedbackStyle.Heavy : Haptics.ImpactFeedbackStyle.Light
-      ).catch(() => {});
+      vibrate(isFirst);
     }
 
     setTimeout(() => setFlash(false), 80);
